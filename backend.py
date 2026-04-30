@@ -16,7 +16,7 @@ from pathlib import Path
 from datetime import datetime
 from google import genai
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List, Any, Dict, Tuple
 from contextlib import redirect_stdout
 from dotenv import load_dotenv
@@ -3530,7 +3530,7 @@ async def github_token_exchange(req: GithubTokenRequest):
 class ListFrontendRequest(BaseModel):
     project_path: str
     frontend_subdir: str = ""
-    files: Dict[str, str] = {}
+    files: Dict[str, str] = Field(default_factory=dict)
 
 FRONTEND_EXTS = {".ts", ".tsx", ".js", ".jsx", ".vue", ".svelte"}
 FRONTEND_SKIP_DIRS = {"node_modules", ".git", "dist", "build", "__pycache__", ".next", "out", ".venv", "venv"}
@@ -3782,7 +3782,7 @@ class AnalyzeFrontendRequest(BaseModel):
     project_path: str
     frontend_subdir: str = ""
     user_request: str = ""
-    files: Dict[str, str] = {}
+    files: Dict[str, str] = Field(default_factory=dict)
 
 
 def _collect_frontend_request_files(
@@ -5052,6 +5052,11 @@ async def health_details():
         "routes": routes,
         "has_analyze_frontend": "/analyze_frontend" in routes,
         "has_update_project": "/update_project" in routes,
+        "capabilities":{
+            "inline_frontend_files":True,
+            "inline_project_files":True,
+            "hosted_rag_requires_local_filessystem":True,
+        },
     }
 
 
