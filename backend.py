@@ -4627,209 +4627,209 @@ def _wants_block(prefix: str) -> bool:
 # end = int(input("Enter the ending number: "))
 # print_1_to10(start,end)
 
-@app.post("/complete")
-async def complete_endpoint(req: CompletionRequest):
-    """
-    Smart Dev inline code completion — optimised for speed + multiline.
-
-    You must be provide suggestions based on the below usecases.
-
-    USECASES:
-    ==========
-
-       1) Based on the Files name.
-       2) Based on the project name and check the files name present inside that folder.
-       3) Based on the class names provide the suggestions.
-       4) Based on the function name provide the suggestions.
-       5) Based on the errors provide the suggestions.
-       6) Based on the incomplete codes provide the suggestion.
-
-    While provide the suggestion you must check the existing code is completed or not, If the code not completed mean you must complete the code with proper struture.
-    Ensure that the code is properly indented and follow the standard coding conventions.
-    If the code is completed mean you must provide the suggestion based on the existing code and also check the code is having any error or not, if the code is having any error mean you must provide the suggestion to fix the error and also provide the suggestion to improve the code quality.
-    If the code is having any incomplete code mean you must provide the suggestion to complete the code with proper structure and also provide the suggestion to improve the code quality.
-    Example:
-    =========
-    num = int(input("Enter a number: "))
-    n = num
-    power = len(str(num))
-    total = 0
-
-    while n > 0:
-        digit = n % 10
-        total += digit ** power
-        n //= 10
-
-    if total == num:
-        print("Armstrong Number")
-    else:
-        print("Not an Armstrong Number")
-
-    FIX 1 — SPEED:
-      Uses COMPLETION_MODEL (default: gemini-2.5-flash) instead of GEMINI_MODEL.
-      Prefix capped at last 40 lines (was 80) — primary remaining latency driver.
-      Block token budget: 600 (was 1500). Still enough for ~50 lines.
-      Short token budget: 120 (was 300). Short completions never need more.
-
-    FIX 2 — MULTILINE:
-      block_hint=True from TS client bypasses _wants_block() — no double work.
-      _wants_block() now catches: blank-line-after-opener, decorators,
-      partial arrow functions, interface/enum/abstract class blocks, and more.
-      Block output cap raised from 80 → 120 lines.
-
-    FIX 3 — NEW PROJECT CONTEXT:
-      project_context carries a compact workspace file-tree summary built by
-      buildProjectContext() in extension.ts. Both prompts include it so the
-      model knows what modules/classes exist even in brand-new projects.
-
-    FIX 4 — PROMPT QUALITY:
-      Short prompt now uses fill-in-the-middle framing with prefix+suffix.
-      Block prompt uses explicit output contract with a typed example.
-      Stop sequences tightened for short mode.
-      Post-processing strips leading blank lines aggressively.
+# @app.post("/complete")
+# async def complete_endpoint(req: CompletionRequest):
 #     """
-    if not req.prefix or len(req.prefix.strip()) < 2:
-        return {"suggestion": "", "is_block": False}
+#     Smart Dev inline code completion — optimised for speed + multiline.
 
-    lang_note = f"Language: {req.language}." if req.language else ""
-    file_note = f"File: {req.filename}."     if req.filename else ""
+#     You must be provide suggestions based on the below usecases.
 
-    # Only last 40 lines as prefix context
-    prefix_lines   = req.prefix.split("\n")
-    prefix_trimmed = "\n".join(prefix_lines[-40:])
-    suffix_trimmed = "\n".join(req.suffix.split("\n")[:10]) if req.suffix else ""
+#     USECASES:
+#     ==========
 
-    # Optional project context block
-    ctx_section = ""
-    if req.project_context and req.project_context.strip():
-        ctx_section = (
-            f"\nPROJECT CONTEXT (workspace file tree — use for imports/references only):\n"
-            f"{req.project_context.strip()}\n"
-        )
+#        1) Based on the Files name.
+#        2) Based on the project name and check the files name present inside that folder.
+#        3) Based on the class names provide the suggestions.
+#        4) Based on the function name provide the suggestions.
+#        5) Based on the errors provide the suggestions.
+#        6) Based on the incomplete codes provide the suggestion.
 
-    # Prefer the client's block hint; fall back to our own heuristic
-    block_mode = req.block_hint or _wants_block(req.prefix)
+#     While provide the suggestion you must check the existing code is completed or not, If the code not completed mean you must complete the code with proper struture.
+#     Ensure that the code is properly indented and follow the standard coding conventions.
+#     If the code is completed mean you must provide the suggestion based on the existing code and also check the code is having any error or not, if the code is having any error mean you must provide the suggestion to fix the error and also provide the suggestion to improve the code quality.
+#     If the code is having any incomplete code mean you must provide the suggestion to complete the code with proper structure and also provide the suggestion to improve the code quality.
+#     Example:
+#     =========
+#     num = int(input("Enter a number: "))
+#     n = num
+#     power = len(str(num))
+#     total = 0
 
-    if block_mode:
-        prompt = (
-            f"You are Smart Dev, an expert code completion engine.\n"
-            f"{lang_note} {file_note}{ctx_section}\n"
-            f"The developer has started writing a function, class, or algorithm.\n"
-            f"Your job: write the COMPLETE, WORKING body that goes after the cursor.\n\n"
-            f"OUTPUT CONTRACT:\n"
-            f"- Raw code ONLY. No prose, no markdown fences, no backticks.\n"
-            f"- Do NOT repeat any line already in the prefix.\n"
-            f"- Do NOT output a blank line as the very first line.\n"
-            f"- Match indentation of the prefix exactly (spaces vs tabs).\n"
-            f"- Write real logic — no stubs, no `pass`, no `# TODO`.\n"
-            f"- Finish with a proper closing token (}}, `end`, dedent, etc.) if needed.\n\n"
-            f"EXAMPLE (Python):\n"
-            f"Prefix:\n"
-            f"def add(a, b):\n"
-            f"<CURSOR>\n"
-            f"Correct output:\n"
-            f"    return a + b\n\n"
-            f"Now complete the real code below.\n\n"
-            f"Prefix:\n"
-            f"{prefix_trimmed}\n"
-            f"<CURSOR — write what comes next, starting on the very next character>\n\n"
-            f"Output (raw code only):"
-        )
-        max_tokens  = 600
-        temperature = 0.15
-        stop_seqs   = None  # Let it finish the block cleanly
+#     while n > 0:
+#         digit = n % 10
+#         total += digit ** power
+#         n //= 10
 
-    else:
-        # Short / inline completion — fill-in-the-middle framing
-        prompt = (
-            f"You are Smart Dev, an inline code completion engine.\n"
-            f"{lang_note} {file_note}{ctx_section}\n"
-            f"Complete ONLY the missing code at <CURSOR>.\n"
-            f"The code after the cursor is already written — do not repeat it.\n\n"
-            f"OUTPUT CONTRACT:\n"
-            f"- Raw code ONLY. No prose, no markdown fences, no backticks.\n"
-            f"- Output AT MOST 5 lines. Prefer the shortest correct completion.\n"
-            f"- Do NOT repeat any code from the prefix or suffix.\n"
-            f"- Do NOT output a leading blank line.\n"
-            f"- Match existing indentation exactly.\n"
-            f"- If no useful completion exists, output an empty string.\n\n"
-            f"EXAMPLE:\n"
-            f"Prefix:  `const total = items.reduce(`\n"
-            f"Suffix:  `, 0);`\n"
-            f"Output:  `(sum, item) => sum + item.price`\n\n"
-            f"Now complete the real code below.\n\n"
-            f"Code before cursor:\n"
-            f"{prefix_trimmed}\n"
-            f"<CURSOR>\n"
-            f"Code after cursor:\n"
-            f"{suffix_trimmed}\n\n"
-            f"Output (1–5 lines, raw code only):"
-        )
-        # FIX: was incorrectly set to 600 — short completions never need more than 120
-        max_tokens  = 120
-        temperature = 0.10   # Slightly lower — short completions must be precise
-        stop_seqs   = ["\n\n", "```"]  # Stop at first blank line or accidental fence
+#     if total == num:
+#         print("Armstrong Number")
+#     else:
+#         print("Not an Armstrong Number")
 
-    try:
-        cfg = {"max_output_tokens": max_tokens, "temperature": temperature}
-        if stop_seqs:
-            cfg["stop_sequences"] = stop_seqs
+#     FIX 1 — SPEED:
+#       Uses COMPLETION_MODEL (default: gemini-2.5-flash) instead of GEMINI_MODEL.
+#       Prefix capped at last 40 lines (was 80) — primary remaining latency driver.
+#       Block token budget: 600 (was 1500). Still enough for ~50 lines.
+#       Short token budget: 120 (was 300). Short completions never need more.
 
-        completion_candidates = [COMPLETION_MODEL]
-        if "gemini-2.5-flash" not in completion_candidates:
-            completion_candidates.append("gemini-2.5-flash")
-        if GEMINI_MODEL not in completion_candidates:
-            completion_candidates.append(GEMINI_MODEL)
+#     FIX 2 — MULTILINE:
+#       block_hint=True from TS client bypasses _wants_block() — no double work.
+#       _wants_block() now catches: blank-line-after-opener, decorators,
+#       partial arrow functions, interface/enum/abstract class blocks, and more.
+#       Block output cap raised from 80 → 120 lines.
 
-        last_error = None
-        response = None
-        for model_name in completion_candidates:
-            try:
-                response = generate_content_logged(
-                    label="complete",
-                    model=model_name,
-                    contents=prompt,
-                    config=cfg,
-                    user_query=f"{req.filename or 'inline completion'} | {req.language or 'unknown'}",
-                    extra=f"block={block_mode}",
-                )
-                break
-            except Exception as model_error:
-                last_error = model_error
-                if "NOT_FOUND" not in str(model_error):
-                    raise
-                print(f"[Worktual /complete] Fallback from {model_name}: {model_error}")
+#     FIX 3 — NEW PROJECT CONTEXT:
+#       project_context carries a compact workspace file-tree summary built by
+#       buildProjectContext() in extension.ts. Both prompts include it so the
+#       model knows what modules/classes exist even in brand-new projects.
 
-        if response is None:
-            raise last_error or RuntimeError("No completion model available")
-        raw = (response.text or "").strip()
+#     FIX 4 — PROMPT QUALITY:
+#       Short prompt now uses fill-in-the-middle framing with prefix+suffix.
+#       Block prompt uses explicit output contract with a typed example.
+#       Stop sequences tightened for short mode.
+#       Post-processing strips leading blank lines aggressively.
+# #     """
+#     if not req.prefix or len(req.prefix.strip()) < 2:
+#         return {"suggestion": "", "is_block": False}
 
-        # Strip accidental markdown fences
-        raw = re.sub(r"^```[\w]*\n?", "", raw)
-        raw = re.sub(r"\n?```$",        "", raw)
+#     lang_note = f"Language: {req.language}." if req.language else ""
+#     file_note = f"File: {req.filename}."     if req.filename else ""
 
-        # Strip leading blank lines the model sometimes emits despite instructions
-        raw = re.sub(r"^\n+", "", raw)
+#     # Only last 40 lines as prefix context
+#     prefix_lines   = req.prefix.split("\n")
+#     prefix_trimmed = "\n".join(prefix_lines[-40:])
+#     suffix_trimmed = "\n".join(req.suffix.split("\n")[:10]) if req.suffix else ""
 
-        raw = raw.strip()
+#     # Optional project context block
+#     ctx_section = ""
+#     if req.project_context and req.project_context.strip():
+#         ctx_section = (
+#             f"\nPROJECT CONTEXT (workspace file tree — use for imports/references only):\n"
+#             f"{req.project_context.strip()}\n"
+#         )
 
-        # Enforce output line caps
-        out_lines = raw.split("\n")
-        if block_mode and len(out_lines) > 120:
-            raw = "\n".join(out_lines[:120])
-        elif not block_mode and len(out_lines) > 5:
-            raw = "\n".join(out_lines[:5])
+#     # Prefer the client's block hint; fall back to our own heuristic
+#     block_mode = req.block_hint or _wants_block(req.prefix)
 
-        print(
-            f"[Worktual /complete] {'BLOCK' if block_mode else 'SHORT'} | "
-            f"{'client-hint' if req.block_hint else 'heuristic'} | "
-            f"{req.language} | {len(raw.split(chr(10)))} lines"
-        )
-        return {"suggestion": raw, "is_block": block_mode}
+#     if block_mode:
+#         prompt = (
+#             f"You are Smart Dev, an expert code completion engine.\n"
+#             f"{lang_note} {file_note}{ctx_section}\n"
+#             f"The developer has started writing a function, class, or algorithm.\n"
+#             f"Your job: write the COMPLETE, WORKING body that goes after the cursor.\n\n"
+#             f"OUTPUT CONTRACT:\n"
+#             f"- Raw code ONLY. No prose, no markdown fences, no backticks.\n"
+#             f"- Do NOT repeat any line already in the prefix.\n"
+#             f"- Do NOT output a blank line as the very first line.\n"
+#             f"- Match indentation of the prefix exactly (spaces vs tabs).\n"
+#             f"- Write real logic — no stubs, no `pass`, no `# TODO`.\n"
+#             f"- Finish with a proper closing token (}}, `end`, dedent, etc.) if needed.\n\n"
+#             f"EXAMPLE (Python):\n"
+#             f"Prefix:\n"
+#             f"def add(a, b):\n"
+#             f"<CURSOR>\n"
+#             f"Correct output:\n"
+#             f"    return a + b\n\n"
+#             f"Now complete the real code below.\n\n"
+#             f"Prefix:\n"
+#             f"{prefix_trimmed}\n"
+#             f"<CURSOR — write what comes next, starting on the very next character>\n\n"
+#             f"Output (raw code only):"
+#         )
+#         max_tokens  = 600
+#         temperature = 0.15
+#         stop_seqs   = None  # Let it finish the block cleanly
 
-    except Exception as e:
-        print(f"[Worktual /complete] Error: {e}")
-        return {"suggestion": "", "is_block": False}
+#     else:
+#         # Short / inline completion — fill-in-the-middle framing
+#         prompt = (
+#             f"You are Smart Dev, an inline code completion engine.\n"
+#             f"{lang_note} {file_note}{ctx_section}\n"
+#             f"Complete ONLY the missing code at <CURSOR>.\n"
+#             f"The code after the cursor is already written — do not repeat it.\n\n"
+#             f"OUTPUT CONTRACT:\n"
+#             f"- Raw code ONLY. No prose, no markdown fences, no backticks.\n"
+#             f"- Output AT MOST 5 lines. Prefer the shortest correct completion.\n"
+#             f"- Do NOT repeat any code from the prefix or suffix.\n"
+#             f"- Do NOT output a leading blank line.\n"
+#             f"- Match existing indentation exactly.\n"
+#             f"- If no useful completion exists, output an empty string.\n\n"
+#             f"EXAMPLE:\n"
+#             f"Prefix:  `const total = items.reduce(`\n"
+#             f"Suffix:  `, 0);`\n"
+#             f"Output:  `(sum, item) => sum + item.price`\n\n"
+#             f"Now complete the real code below.\n\n"
+#             f"Code before cursor:\n"
+#             f"{prefix_trimmed}\n"
+#             f"<CURSOR>\n"
+#             f"Code after cursor:\n"
+#             f"{suffix_trimmed}\n\n"
+#             f"Output (1–5 lines, raw code only):"
+#         )
+#         # FIX: was incorrectly set to 600 — short completions never need more than 120
+#         max_tokens  = 120
+#         temperature = 0.10   # Slightly lower — short completions must be precise
+#         stop_seqs   = ["\n\n", "```"]  # Stop at first blank line or accidental fence
+
+#     try:
+#         cfg = {"max_output_tokens": max_tokens, "temperature": temperature}
+#         if stop_seqs:
+#             cfg["stop_sequences"] = stop_seqs
+
+#         completion_candidates = [COMPLETION_MODEL]
+#         if "gemini-2.5-flash" not in completion_candidates:
+#             completion_candidates.append("gemini-2.5-flash")
+#         if GEMINI_MODEL not in completion_candidates:
+#             completion_candidates.append(GEMINI_MODEL)
+
+#         last_error = None
+#         response = None
+#         for model_name in completion_candidates:
+#             try:
+#                 response = generate_content_logged(
+#                     label="complete",
+#                     model=model_name,
+#                     contents=prompt,
+#                     config=cfg,
+#                     user_query=f"{req.filename or 'inline completion'} | {req.language or 'unknown'}",
+#                     extra=f"block={block_mode}",
+#                 )
+#                 break
+#             except Exception as model_error:
+#                 last_error = model_error
+#                 if "NOT_FOUND" not in str(model_error):
+#                     raise
+#                 print(f"[Worktual /complete] Fallback from {model_name}: {model_error}")
+
+#         if response is None:
+#             raise last_error or RuntimeError("No completion model available")
+#         raw = (response.text or "").strip()
+
+#         # Strip accidental markdown fences
+#         raw = re.sub(r"^```[\w]*\n?", "", raw)
+#         raw = re.sub(r"\n?```$",        "", raw)
+
+#         # Strip leading blank lines the model sometimes emits despite instructions
+#         raw = re.sub(r"^\n+", "", raw)
+
+#         raw = raw.strip()
+
+#         # Enforce output line caps
+#         out_lines = raw.split("\n")
+#         if block_mode and len(out_lines) > 120:
+#             raw = "\n".join(out_lines[:120])
+#         elif not block_mode and len(out_lines) > 5:
+#             raw = "\n".join(out_lines[:5])
+
+#         print(
+#             f"[Worktual /complete] {'BLOCK' if block_mode else 'SHORT'} | "
+#             f"{'client-hint' if req.block_hint else 'heuristic'} | "
+#             f"{req.language} | {len(raw.split(chr(10)))} lines"
+#         )
+#         return {"suggestion": raw, "is_block": block_mode}
+
+#     except Exception as e:
+#         print(f"[Worktual /complete] Error: {e}")
+#         return {"suggestion": "", "is_block": False}
 
 # ─── Run Project Detection Endpoints ─────────────────────────────────────────
 
