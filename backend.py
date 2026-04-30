@@ -2299,6 +2299,14 @@ async def update_project_endpoint(req: UpdateProjectRequest):
         if req.files:
             project_files = req.files          # sent directly from VS Code
         else:
+            if SERVER_MODE:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Hosted backend cannot read the VS Code workspace from project_path. "
+                        "Send the project files inline in the request body."
+                    ),
+                )
             project_files = _read_project_files(req.project_path)  # local fallback
         if not project_files:
             raise HTTPException(status_code=404, detail="No readable files found")
@@ -2440,6 +2448,14 @@ class WorkspaceIndexRequest(BaseModel):
 @app.post("/rag/index")
 async def rag_index_endpoint(req: WorkspaceIndexRequest):
     try:
+        if SERVER_MODE:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Hosted backend RAG indexing is not available from workspace_path alone. "
+                    "Use inline project files from the extension."
+                ),
+            )
         engine = build_engine(workspace_path=req.workspace_path)
         return {
             "workspace_path": req.workspace_path,
@@ -2454,6 +2470,14 @@ async def rag_index_endpoint(req: WorkspaceIndexRequest):
 @app.post("/rag/chat")
 async def rag_chat_endpoint(req: WorkspaceRagRequest):
     try:
+        if SERVER_MODE:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Hosted backend RAG chat is not available from workspace_path alone. "
+                    "Use inline project files from the extension."
+                ),
+            )
         engine = build_engine(workspace_path=req.workspace_path)
         engine.build_or_update_index(force=req.force_reindex)
         result = engine.chat_about_project(
@@ -2474,6 +2498,14 @@ async def rag_chat_endpoint(req: WorkspaceRagRequest):
 @app.post("/rag/update")
 async def rag_update_endpoint(req: WorkspaceRagRequest):
     try:
+        if SERVER_MODE:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Hosted backend RAG update is not available from workspace_path alone. "
+                    "Use the inline project update flow from the extension."
+                ),
+            )
         result = get_project_update_response(
             user_request=req.user_request,
             prompt_instructions=req.prompt_instructions,
@@ -3498,6 +3530,7 @@ async def github_token_exchange(req: GithubTokenRequest):
 class ListFrontendRequest(BaseModel):
     project_path: str
     frontend_subdir: str = ""
+    files: Dict[str, str] = {}
 
 FRONTEND_EXTS = {".ts", ".tsx", ".js", ".jsx", ".vue", ".svelte"}
 FRONTEND_SKIP_DIRS = {"node_modules", ".git", "dist", "build", "__pycache__", ".next", "out", ".venv", "venv"}
@@ -3700,6 +3733,20 @@ async def list_frontend_files_endpoint(req: ListFrontendRequest):
     Returns immediately so the UI can show the file list before AI processing begins.
     """
     try:
+        inline_files = _collect_frontend_request_files(req.files, req.frontend_subdir)
+        if inline_files:
+            files = [
+                {"path": rel_path, "size": len(content)}
+                for rel_path, content in sorted(
+                    inline_files.items(),
+                    key=lambda item: (
+                        0 if any(item[0].endswith(name) for name in FRONTEND_PRIORITY) else 1,
+                        item[0]
+                    )
+                )
+            ]
+            return {"files": files, "base_path": req.frontend_subdir or "."}
+
         base = Path(req.project_path)
         if req.frontend_subdir:
             base = base / req.frontend_subdir
@@ -3735,6 +3782,43 @@ class AnalyzeFrontendRequest(BaseModel):
     project_path: str
     frontend_subdir: str = ""
     user_request: str = ""
+    files: Dict[str, str] = {}
+
+
+def _collect_frontend_request_files(
+    files: Optional[Dict[str, str]],
+    frontend_subdir: str = "",
+) -> Dict[str, str]:
+    normalized_frontend = _normalize_rel_path(frontend_subdir)
+    collected: Dict[str, str] = {}
+
+    for raw_path, raw_content in (files or {}).items():
+        rel_path = _normalize_rel_path(raw_path)
+        if not rel_path:
+            continue
+
+        rel_parts = Path(rel_path).parts
+        if set(rel_parts) & FRONTEND_SKIP_DIRS:
+            continue
+
+        if normalized_frontend:
+            prefix = normalized_frontend + "/"
+            if rel_path == normalized_frontend:
+                continue
+            if rel_path.startswith(prefix):
+                rel_path = rel_path[len(prefix):]
+            else:
+                continue
+
+        if not rel_path:
+            continue
+
+        if Path(rel_path).suffix.lower() not in FRONTEND_EXTS:
+            continue
+
+        collected[rel_path] = str(raw_content or "")
+
+    return collected
 # async def analyze_frontend_endpoint(req: AnalyzeFrontendRequest):
 #     try:
 #         if not check_gemini_available():
@@ -3848,28 +3932,44 @@ async def analyze_frontend_endpoint(req: AnalyzeFrontendRequest):
         if not check_gemini_available():
             raise HTTPException(status_code=503, detail="Gemini API unavailable")
 
-        base = Path(req.project_path)
-        if req.frontend_subdir:
-            base = base / req.frontend_subdir
-        if not base.exists():
-            raise HTTPException(status_code=404, detail="Path not found: " + str(base))
-
         files_read: Dict[str, str] = {}
         total_chars = 0
         # Keep frontend analysis affordable by default; both limits are env-configurable.
         CHAR_LIMIT     = ANALYZE_FRONTEND_CONTEXT_CHAR_LIMIT
         PER_FILE_LIMIT = ANALYZE_FRONTEND_PER_FILE_CHAR_LIMIT
 
-        for entry in _collect_frontend_source_files(base):
-            rel = str(entry.relative_to(base))
-            try:
-                text = entry.read_text(encoding="utf-8", errors="ignore")
+        inline_files = _collect_frontend_request_files(req.files, req.frontend_subdir)
+        if inline_files:
+            for rel, text in sorted(
+                inline_files.items(),
+                key=lambda item: (
+                    0 if any(item[0].endswith(name) for name in FRONTEND_PRIORITY + ["index.ts"]) else 1,
+                    item[0]
+                )
+            ):
                 if total_chars + len(text) > CHAR_LIMIT:
                     break
                 files_read[rel] = text
                 total_chars += len(text)
-            except Exception:
-                pass
+            base_label = req.frontend_subdir or req.project_path or "inline_frontend_files"
+        else:
+            base = Path(req.project_path)
+            if req.frontend_subdir:
+                base = base / req.frontend_subdir
+            if not base.exists():
+                raise HTTPException(status_code=404, detail="Path not found: " + str(base))
+
+            for entry in _collect_frontend_source_files(base):
+                rel = str(entry.relative_to(base))
+                try:
+                    text = entry.read_text(encoding="utf-8", errors="ignore")
+                    if total_chars + len(text) > CHAR_LIMIT:
+                        break
+                    files_read[rel] = text
+                    total_chars += len(text)
+                except Exception:
+                    pass
+            base_label = str(base)
 
         if not files_read:
             raise HTTPException(status_code=404, detail="No frontend source files found")
@@ -3963,7 +4063,7 @@ async def analyze_frontend_endpoint(req: AnalyzeFrontendRequest):
             model=GEMINI_MODEL,
             contents=prompt,
             config={"max_output_tokens": 6000, "temperature": 0.1},
-            user_query=req.user_request or str(base),
+            user_query=req.user_request or base_label,
             extra=f"files={len(files_read)}",
         )
         raw = response.text.strip()
@@ -4934,6 +5034,25 @@ async def fix_missing_files_endpoint(req: DetectProjectRequest):
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
+
+
+@app.get("/health/details")
+async def health_details():
+    routes = sorted(
+        {
+            getattr(route, "path", "")
+            for route in app.router.routes
+            if getattr(route, "path", "")
+        }
+    )
+    return {
+        "status": "ok",
+        "server_mode": SERVER_MODE,
+        "route_count": len(routes),
+        "routes": routes,
+        "has_analyze_frontend": "/analyze_frontend" in routes,
+        "has_update_project": "/update_project" in routes,
+    }
 
 
 if __name__ == "__main__":
