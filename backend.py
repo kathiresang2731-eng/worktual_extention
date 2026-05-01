@@ -3532,9 +3532,9 @@ class ListFrontendRequest(BaseModel):
     frontend_subdir: str = ""
     files: Dict[str, str] = Field(default_factory=dict)
 
-FRONTEND_EXTS = {".ts", ".tsx", ".js", ".jsx", ".vue", ".svelte"}
+FRONTEND_EXTS = {".ts", ".tsx", ".js", ".jsx", ".vue", ".svelte", ".html", ".htm", ".php", ".css", ".scss"}
 FRONTEND_SKIP_DIRS = {"node_modules", ".git", "dist", "build", "__pycache__", ".next", "out", ".venv", "venv"}
-FRONTEND_PRIORITY = ["App.tsx", "App.jsx", "App.ts", "App.js", "main.tsx", "main.ts", "index.tsx"]
+FRONTEND_PRIORITY = ["App.tsx", "App.jsx", "App.ts", "App.js", "main.tsx", "main.ts", "index.tsx", "index.html", "index.php"]
 
 def _is_noise_frontend_file(entry: Path, base: Path) -> bool:
     rel_parts = entry.relative_to(base).parts
@@ -3988,12 +3988,16 @@ async def analyze_frontend_endpoint(req: AnalyzeFrontendRequest):
             re.compile(r"""(?:axios|client|api|http|fetch)\s*\.\s*(?:get|post|put|patch|delete|request)\s*\(\s*['"`]([^'"`\s]+)['"`]""", re.IGNORECASE),
             # fetch('/auth/login')
             re.compile(r"""fetch\s*\(\s*['"`]([^'"`\s]+)['"`]""", re.IGNORECASE),
+            # $.get('/items'), $.post('/login')
+            re.compile(r"""\$\.\s*(?:get|getJSON|post)\s*\(\s*['"`]([^'"`\s]+)['"`]""", re.IGNORECASE),
             # fetch(`${API_BASE_URL}/generate`) / axios.get(`${BACKEND}/preview`)
             re.compile(r"""(?:fetch|axios\s*\.\s*(?:get|post|put|patch|delete|request)|client\s*\.\s*(?:get|post|put|patch|delete|request))\s*\(\s*`[^`]*\$\{[^}]+\}([^`]+)`""", re.IGNORECASE),
             # axios({ url: '/api/foo' })
             re.compile(r"""url\s*:\s*['"`]([/][^'"`\s]+)['"`]""", re.IGNORECASE),
             # url: `${API_BASE_URL}/project/${id}/fix-build`
             re.compile(r"""url\s*:\s*`[^`]*\$\{[^}]+\}([^`]+)`""", re.IGNORECASE),
+            # <form action="/login" method="post">
+            re.compile(r"""<form[^>]*action\s*=\s*['"`]([^'"`\s>]+)['"`]""", re.IGNORECASE),
             # baseURL: 'http://localhost:8888'  or  baseURL: '/api'
             re.compile(r"""baseURL\s*:\s*['"`]([^'"`\s]+)['"`]""", re.IGNORECASE),
             # const API_BASE_URL = 'http://localhost:8025'
